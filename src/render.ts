@@ -1,4 +1,5 @@
-import { CANVAS_HEIGHT, CANVAS_WIDTH, GAME_TITLE, SPEED_ROUND_SCORE_MULTIPLIER, START_BUTTON, TOWER_POSITION } from "./constants";
+import { CANVAS_HEIGHT, CANVAS_WIDTH, GAME_TITLE, START_BUTTON, TOWER_POSITION } from "./constants";
+import { COMBO_DEFINITIONS, COMBO_ORDER } from "./data/combos";
 import { TOWER_DEFINITIONS, TOWER_ORDER, towerUnlockedByWave } from "./data/towers";
 import { DIFFICULTY_OPTIONS, difficultyButtonRect, mapCardRect } from "./ui/menu";
 import { MAP_DEFINITIONS } from "./data/maps";
@@ -10,6 +11,19 @@ const TOWER_COLORS: Record<TowerTypeId, string> = {
   ice_tower: "#9fe8ff",
   sniper: "#dce7ff",
 };
+
+function getComboTowerIds(state: GameState): Set<number> {
+  const towerIds = new Set<number>();
+  for (const combo of state.activeCombos) {
+    towerIds.add(combo.towerIds[0]);
+    towerIds.add(combo.towerIds[1]);
+  }
+  return towerIds;
+}
+
+function getTowerById(state: GameState, towerId: number) {
+  return state.towers.find((tower) => tower.id === towerId) ?? null;
+}
 
 function drawBackgroundLayer(ctx: CanvasRenderingContext2D): void {
   const sky = ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT);
@@ -112,10 +126,55 @@ function drawBaseTower(ctx: CanvasRenderingContext2D, state: GameState): void {
   ctx.restore();
 }
 
+function drawComboLinks(ctx: CanvasRenderingContext2D, state: GameState): void {
+  for (const combo of state.activeCombos) {
+    const leftTower = getTowerById(state, combo.towerIds[0]);
+    const rightTower = getTowerById(state, combo.towerIds[1]);
+    if (!leftTower || !rightTower) {
+      continue;
+    }
+
+    ctx.save();
+    ctx.strokeStyle = combo.color;
+    ctx.globalAlpha = 0.6;
+    ctx.lineWidth = 4;
+    ctx.setLineDash([8, 10]);
+    ctx.beginPath();
+    ctx.moveTo(leftTower.x, leftTower.y);
+    ctx.lineTo(rightTower.x, rightTower.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+
+    const labelX = (leftTower.x + rightTower.x) / 2;
+    const labelY = (leftTower.y + rightTower.y) / 2 - 12;
+    ctx.fillStyle = "rgba(4, 20, 18, 0.82)";
+    ctx.fillRect(labelX - 84, labelY - 18, 168, 28);
+    ctx.strokeStyle = combo.color;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(labelX - 84, labelY - 18, 168, 28);
+    ctx.fillStyle = combo.color;
+    ctx.font = "700 14px 'Barlow', 'Trebuchet MS', sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(combo.name, labelX, labelY + 1);
+    ctx.textAlign = "left";
+    ctx.restore();
+  }
+}
+
 function drawPlacedTowers(ctx: CanvasRenderingContext2D, state: GameState): void {
+  const comboTowerIds = getComboTowerIds(state);
+
   for (const tower of state.towers) {
     ctx.save();
     ctx.translate(tower.x, tower.y);
+
+    if (comboTowerIds.has(tower.id)) {
+      ctx.fillStyle = "rgba(255, 232, 166, 0.28)";
+      ctx.beginPath();
+      ctx.arc(0, 0, 32, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     const fill = TOWER_COLORS[tower.typeId];
     ctx.fillStyle = "#122744";
@@ -288,7 +347,7 @@ function drawHeaderLayer(ctx: CanvasRenderingContext2D, subtitle: string): void 
   ctx.fillStyle = "#ffd565";
   ctx.font = "700 30px 'Bungee', 'Trebuchet MS', sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText(`${GAME_TITLE} • Neo Jungle`, CANVAS_WIDTH / 2, 44);
+  ctx.fillText(`${GAME_TITLE} • Combo Grove`, CANVAS_WIDTH / 2, 44);
 
   ctx.fillStyle = "#9ee6c6";
   ctx.font = "600 17px 'Barlow', 'Trebuchet MS', sans-serif";
@@ -317,11 +376,11 @@ function drawTitleScreen(ctx: CanvasRenderingContext2D): void {
   ctx.fillStyle = "#fff6cc";
   ctx.font = "700 52px 'Bungee', 'Trebuchet MS', sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText("Speed-Rounds Jungle", CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 44);
+  ctx.fillText("Tower Combo Grove", CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 - 44);
 
   ctx.font = "600 23px 'Barlow', 'Trebuchet MS', sans-serif";
   ctx.fillStyle = "#aceac9";
-  ctx.fillText("Three courses. Dynamic difficulty. Tower progression.", CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 6);
+  ctx.fillText("Pair towers, link synergies, and hold the line.", CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2 + 6);
 
   drawButton(ctx, "Select Course", { x: START_BUTTON.x + START_BUTTON.width / 2, y: START_BUTTON.y + START_BUTTON.height / 2 });
   ctx.textAlign = "left";
@@ -436,9 +495,9 @@ function drawGameOverOverlay(ctx: CanvasRenderingContext2D, state: GameState): v
 
 function drawTowerShop(ctx: CanvasRenderingContext2D, state: GameState): void {
   const panelX = 18;
-  const panelY = 510;
+  const panelY = 472;
   const panelWidth = 360;
-  const panelHeight = 186;
+  const panelHeight = 224;
 
   ctx.fillStyle = "rgba(6, 27, 24, 0.82)";
   ctx.fillRect(panelX, panelY, panelWidth, panelHeight);
@@ -467,7 +526,21 @@ function drawTowerShop(ctx: CanvasRenderingContext2D, state: GameState): void {
 
   ctx.fillStyle = "#9de4c8";
   ctx.font = "600 13px 'Barlow', 'Trebuchet MS', sans-serif";
-  ctx.fillText("Click empty ground to place • Click tower to upgrade • 0 cancels", panelX + 12, panelY + panelHeight - 14);
+  ctx.fillText("Click empty ground to place • Click tower to upgrade • 0 cancels", panelX + 12, panelY + 182);
+
+  ctx.fillStyle = "#ffe6a8";
+  ctx.font = "700 13px 'Barlow', 'Trebuchet MS', sans-serif";
+  ctx.fillText("Combo Recipes", panelX + 12, panelY + 194);
+
+  COMBO_ORDER.forEach((comboId, index) => {
+    const combo = COMBO_DEFINITIONS[comboId];
+    const [left, right] = combo.towerTypes;
+    const leftLabel = TOWER_DEFINITIONS[left].name.replace(" Tower", "");
+    const rightLabel = TOWER_DEFINITIONS[right].name.replace(" Tower", "");
+    ctx.fillStyle = combo.color;
+    ctx.font = "600 11px 'Barlow', 'Trebuchet MS', sans-serif";
+    ctx.fillText(`${leftLabel} + ${rightLabel} • ${combo.name}`, panelX + 12, panelY + 208 + index * 14);
+  });
 }
 
 function drawHudLayer(ctx: CanvasRenderingContext2D, state: GameState): void {
@@ -476,20 +549,18 @@ function drawHudLayer(ctx: CanvasRenderingContext2D, state: GameState): void {
   drawHudPanel(ctx, "Wave", String(state.wave), 408, 86);
   drawHudPanel(ctx, "Coins", String(state.coins), 602, 86);
 
-  if (state.speedRoundActive) {
-    ctx.fillStyle = "rgba(238, 129, 72, 0.86)";
-    ctx.fillRect(796, 90, 466, 48);
-    ctx.fillStyle = "#fffbde";
-    ctx.font = "700 24px 'Barlow', 'Trebuchet MS', sans-serif";
-    const endsIn = Math.max(0, Math.ceil((state.speedRoundEndsAtMs - state.elapsedMs) / 1000));
-    ctx.fillText(`SPEED ROUND x${SPEED_ROUND_SCORE_MULTIPLIER} SCORE • ${endsIn}s`, 814, 121);
+  ctx.fillStyle = "rgba(8, 44, 39, 0.8)";
+  ctx.fillRect(796, 90, 466, 76);
+  ctx.fillStyle = "#ffe6a8";
+  ctx.font = "700 20px 'Barlow', 'Trebuchet MS', sans-serif";
+  ctx.fillText(`Combo Network • ${state.activeCombos.length} active`, 814, 118);
+  ctx.fillStyle = "#aef0d3";
+  ctx.font = "600 15px 'Barlow', 'Trebuchet MS', sans-serif";
+  if (state.activeCombos.length > 0) {
+    const names = state.activeCombos.slice(0, 2).map((combo) => combo.name).join(" • ");
+    ctx.fillText(names, 814, 145);
   } else {
-    ctx.fillStyle = "rgba(8, 44, 39, 0.8)";
-    ctx.fillRect(796, 90, 466, 48);
-    ctx.fillStyle = "#aef0d3";
-    ctx.font = "600 22px 'Barlow', 'Trebuchet MS', sans-serif";
-    const startsIn = Math.max(0, Math.ceil((state.nextSpeedRoundAtMs - state.elapsedMs) / 1000));
-    ctx.fillText(`Next speed round in ${startsIn}s`, 816, 121);
+    ctx.fillText("Pair 1+2 for Crossfire Link or 3+4 for Shatter Lane.", 814, 145);
   }
 
   ctx.fillStyle = "#d8ffe9";
@@ -503,6 +574,7 @@ export function renderGame(ctx: CanvasRenderingContext2D, state: GameState): voi
   drawBackgroundLayer(ctx);
   drawPathLayer(ctx, state.pathPoints);
   drawBaseTower(ctx, state);
+  drawComboLinks(ctx, state);
   drawPlacedTowers(ctx, state);
   drawBalloonsLayer(ctx, state);
   drawProjectilesLayer(ctx, state);

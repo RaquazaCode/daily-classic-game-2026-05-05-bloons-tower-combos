@@ -95,8 +95,8 @@ const scriptedDemo = query.get("scripted_demo") === "1";
 let state: GameState = createInitialState(
   GAME_SEED,
   scriptedDemo,
-  readPersistedMapId(),
-  readPersistedDifficulty(),
+  scriptedDemo ? DEFAULT_MAP_ID : readPersistedMapId(),
+  scriptedDemo ? "easy" : readPersistedDifficulty(),
 );
 if (scriptedDemo) {
   startPlaying(state);
