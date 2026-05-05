@@ -3,6 +3,7 @@ export type Screen = "title" | "map_select" | "difficulty_select" | "playing" | 
 export type DifficultyChoice = "easy" | "medium" | "hard";
 export type TowerTypeId = "dart_monkey" | "tack_sprayer" | "ice_tower" | "sniper";
 export type BalloonTier = "red" | "blue" | "green" | "black";
+export type TowerComboId = "crossfire_link" | "shatter_lane";
 
 export interface Vec2 {
   x: number;
@@ -44,6 +45,9 @@ export interface Dart {
   color: string;
   slowMs: number;
   targetBalloonId: number | null;
+  comboId: TowerComboId | null;
+  rewardBonus: number;
+  extraDamageVsSlowed: number;
 }
 
 export interface PlacedTower {
@@ -70,9 +74,18 @@ export interface Particle {
 }
 
 export interface PendingEvent {
-  type: "pop" | "life_lost" | "speed_round_start" | "speed_round_end" | "wave_start" | "game_over";
+  type: "pop" | "life_lost" | "combo_ready" | "speed_round_start" | "speed_round_end" | "wave_start" | "game_over";
   atMs: number;
   note: string;
+}
+
+export interface ActiveCombo {
+  id: TowerComboId;
+  name: string;
+  description: string;
+  color: string;
+  towerIds: [number, number];
+  towerTypes: [TowerTypeId, TowerTypeId];
 }
 
 export interface GameState {
@@ -98,6 +111,7 @@ export interface GameState {
   wavePlan: BalloonTier[];
   waveSpawnCursor: number;
   poppedTotal: number;
+  activeCombos: ActiveCombo[];
   pendingEvents: PendingEvent[];
   seed: string;
   scriptedDemo: boolean;
@@ -133,6 +147,8 @@ export interface GameSnapshot {
   towersPlaced: number;
   projectilesAlive: number;
   poppedTotal: number;
+  comboCount: number;
+  activeComboIds: TowerComboId[];
   seed: string;
   pendingEvents: string[];
 }

@@ -20,11 +20,11 @@ import {
   SPEED_ROUND_BALLOON_MULTIPLIER,
   SPEED_ROUND_DURATION_MS,
   SPEED_ROUND_INTERVAL_MS,
-  SPEED_ROUND_SCORE_MULTIPLIER,
   START_LIVES,
   TOWER_POSITION,
 } from "./constants";
 import { circlesOverlap } from "./collision";
+import { COMBO_DEFINITIONS, getComboDefinitionForPair } from "./data/combos";
 import { TOWER_DEFINITIONS, towerUnlockedByWave } from "./data/towers";
 import { BALLOON_DEFINITIONS } from "./data/waves";
 import { DEFAULT_MAP_ID, DIFFICULTY_MODIFIERS, getMapById } from "./data/maps";
@@ -36,11 +36,13 @@ import type {
   BalloonTier,
   Dart,
   DifficultyChoice,
+  ActiveCombo,
   GameSnapshot,
   GameState,
   Particle,
   PathSegment,
   PendingEvent,
+  TowerComboId,
   TowerTypeId,
   Vec2,
 } from "./types";
@@ -58,6 +60,16 @@ interface RunModifiers {
   intervalMultiplier: number;
   waveSizeMultiplier: number;
   rewardMultiplier: number;
+}
+
+interface TowerCombatProfile {
+  comboId: TowerComboId | null;
+  fireRateMs: number;
+  damage: number;
+  slowMs: number;
+  rewardBonus: number;
+  extraDamageVsSlowed: number;
+  projectileColor: string;
 }
 
 function buildPathInfo(points: readonly Vec2[]): PathInfo {
@@ -128,10 +140,6 @@ function speedMultiplier(state: GameState): number {
   return state.speedRoundActive ? SPEED_ROUND_BALLOON_MULTIPLIER : 1;
 }
 
-function scoreMultiplier(state: GameState): number {
-  return state.speedRoundActive ? SPEED_ROUND_SCORE_MULTIPLIER : 1;
-}
-
 function startingCoins(difficulty: DifficultyChoice): number {
   if (difficulty === "easy") {
     return 240;
@@ -140,6 +148,97 @@ function startingCoins(difficulty: DifficultyChoice): number {
     return 170;
   }
   return 200;
+}
+
+function comboKey(combo: ActiveCombo): string {
+  return `${combo.id}:${combo.towerIds[0]}-${combo.towerIds[1]}`;
+}
+
+function refreshActiveCombos(state: GameState, emitEvents = false): void {
+  const previousKeys = new Set(state.activeCombos.map(comboKey));
+  const nextCombos: ActiveCombo[] = [];
+
+  for (let leftIndex = 0; leftIndex < state.towers.length; leftIndex += 1) {
+    const leftTower = state.towers[leftIndex];
+    for (let rightIndex = leftIndex + 1; rightIndex < state.towers.length; rightIndex += 1) {
+      const rightTower = state.towers[rightIndex];
+      const definition = getComboDefinitionForPair(leftTower.typeId, rightTower.typeId);
+      if (!definition) {
+        continue;
+      }
+
+      const distance = Math.hypot(leftTower.x - rightTower.x, leftTower.y - rightTower.y);
+      if (distance > definition.linkRadius) {
+        continue;
+      }
+
+      const combo: ActiveCombo = {
+        id: definition.id,
+        name: definition.name,
+        description: definition.description,
+        color: definition.color,
+        towerIds: [Math.min(leftTower.id, rightTower.id), Math.max(leftTower.id, rightTower.id)],
+        towerTypes: [leftTower.typeId, rightTower.typeId],
+      };
+      nextCombos.push(combo);
+
+      if (emitEvents && !previousKeys.has(comboKey(combo))) {
+        appendEvent(state, "combo_ready", `${definition.name} @ ${Math.round(distance)}px`);
+      }
+    }
+  }
+
+  state.activeCombos = nextCombos;
+}
+
+function buildTowerCombatProfile(state: GameState, tower: { id: number; typeId: TowerTypeId; fireRateMs: number; damage: number }): TowerCombatProfile {
+  const definition = TOWER_DEFINITIONS[tower.typeId];
+  const comboIds = new Set<TowerComboId>();
+  let rewardBonus = 0;
+  let extraDamageVsSlowed = 0;
+  let slowMs = definition.slowMs ?? 0;
+  let fireRateMs = tower.fireRateMs;
+  let projectileColor = definition.projectileColor;
+
+  for (const combo of state.activeCombos) {
+    if (!combo.towerIds.includes(tower.id)) {
+      continue;
+    }
+    if (comboIds.has(combo.id)) {
+      continue;
+    }
+    comboIds.add(combo.id);
+
+    const comboDefinition = COMBO_DEFINITIONS[combo.id];
+    fireRateMs = Math.max(260, Math.round(fireRateMs * comboDefinition.fireRateMultiplier));
+    rewardBonus += comboDefinition.rewardBonus;
+
+    if (combo.id === "crossfire_link") {
+      projectileColor = tower.typeId === "tack_sprayer" ? "#ffe383" : "#fff2b8";
+    }
+
+    if (combo.id === "shatter_lane") {
+      if (tower.typeId === "ice_tower") {
+        slowMs += comboDefinition.slowBonusMs ?? 0;
+        projectileColor = "#b8eeff";
+      }
+      if (tower.typeId === "sniper") {
+        extraDamageVsSlowed += comboDefinition.extraDamageVsSlowed ?? 0;
+        projectileColor = "#dff6ff";
+      }
+    }
+  }
+
+  const [comboId] = comboIds;
+  return {
+    comboId: comboId ?? null,
+    fireRateMs,
+    damage: tower.damage,
+    slowMs,
+    rewardBonus,
+    extraDamageVsSlowed,
+    projectileColor,
+  };
 }
 
 function acquireDart(state: GameState): Dart {
@@ -160,6 +259,9 @@ function acquireDart(state: GameState): Dart {
     color: "#f4fbff",
     slowMs: 0,
     targetBalloonId: null,
+    comboId: null,
+    rewardBonus: 0,
+    extraDamageVsSlowed: 0,
   };
 }
 
@@ -251,6 +353,7 @@ function resetRunProgress(state: GameState): void {
   state.waveSpawnCursor = 0;
   state.poppedTotal = 0;
   state.pendingEvents = [];
+  state.activeCombos = [];
   state.scriptedShotCursor = 0;
   state.spawnCooldownMs = 0;
   state.spawnedInWave = 0;
@@ -346,6 +449,9 @@ function spawnProjectile(
   color: string,
   targetBalloonId: number | null,
   slowMs: number,
+  comboId: TowerComboId | null,
+  rewardBonus: number,
+  extraDamageVsSlowed: number,
 ): void {
   const dx = targetX - originX;
   const dy = targetY - originY;
@@ -366,6 +472,9 @@ function spawnProjectile(
   dart.color = color;
   dart.slowMs = slowMs;
   dart.targetBalloonId = targetBalloonId;
+  dart.comboId = comboId;
+  dart.rewardBonus = rewardBonus;
+  dart.extraDamageVsSlowed = extraDamageVsSlowed;
   state.nextEntityId += 1;
   state.darts.push(dart);
 }
@@ -389,6 +498,7 @@ function spawnTowerProjectiles(state: GameState, deltaMs: number): void {
     if (!target) {
       continue;
     }
+    const profile = buildTowerCombatProfile(state, tower);
 
     if (definition.mode === "radial") {
       const count = definition.radialProjectiles ?? 6;
@@ -404,10 +514,13 @@ function spawnTowerProjectiles(state: GameState, deltaMs: number): void {
           tx,
           ty,
           definition.projectileSpeed,
-          tower.damage,
-          definition.projectileColor,
+          profile.damage,
+          profile.projectileColor,
           null,
-          definition.slowMs ?? 0,
+          profile.slowMs,
+          profile.comboId,
+          profile.rewardBonus,
+          profile.extraDamageVsSlowed,
         );
       }
     } else {
@@ -418,14 +531,17 @@ function spawnTowerProjectiles(state: GameState, deltaMs: number): void {
         target.x,
         target.y,
         definition.projectileSpeed,
-        tower.damage,
-        definition.projectileColor,
+        profile.damage,
+        profile.projectileColor,
         target.id,
-        definition.slowMs ?? 0,
+        profile.slowMs,
+        profile.comboId,
+        profile.rewardBonus,
+        profile.extraDamageVsSlowed,
       );
     }
 
-    tower.fireCooldownMs = tower.fireRateMs;
+    tower.fireCooldownMs = profile.fireRateMs;
   }
 }
 
@@ -462,6 +578,7 @@ export function createInitialState(
     wavePlan: [],
     waveSpawnCursor: 0,
     poppedTotal: 0,
+    activeCombos: [],
     pendingEvents: [],
     seed,
     scriptedDemo,
@@ -547,6 +664,7 @@ export function tryPlaceTower(state: GameState, x: number, y: number): boolean {
   state.nextEntityId += 1;
   state.towers.push(tower);
   state.coins -= definition.cost;
+  refreshActiveCombos(state, true);
   appendEvent(state, "pop", `tower:${typeId} coins:${state.coins}`);
   return true;
 }
@@ -591,6 +709,9 @@ export function fireDartAt(
     2,
     "#f4fbff",
     targetBalloonId,
+    0,
+    null,
+    0,
     0,
   );
   state.muzzleFlashMs = MUZZLE_FLASH_DURATION_MS;
@@ -714,7 +835,7 @@ function resolveCollisions(state: GameState): void {
 
   const deadBalloonIds = new Set<number>();
   const removeDartIds = new Set<number>();
-  const poppedBalloons: Balloon[] = [];
+  const poppedBalloons: Array<{ balloon: Balloon; dart: Dart }> = [];
 
   for (const dart of state.darts) {
     if (removeDartIds.has(dart.id)) {
@@ -732,17 +853,21 @@ function resolveCollisions(state: GameState): void {
 
       removeDartIds.add(dart.id);
 
+      const slowedAtHit = state.elapsedMs < balloon.slowUntilMs;
       if (dart.slowMs > 0 && !balloon.resistantToIce) {
         balloon.slowUntilMs = Math.max(balloon.slowUntilMs, state.elapsedMs + dart.slowMs);
       }
 
       const armor = balloon.tier === "black" ? 1 : 0;
-      const appliedDamage = Math.max(1, dart.damage - armor);
+      let appliedDamage = Math.max(1, dart.damage - armor);
+      if (slowedAtHit && dart.extraDamageVsSlowed > 0) {
+        appliedDamage += dart.extraDamageVsSlowed;
+      }
       balloon.health -= appliedDamage;
 
       if (balloon.health <= 0) {
         deadBalloonIds.add(balloon.id);
-        poppedBalloons.push(balloon);
+        poppedBalloons.push({ balloon, dart });
       }
       break;
     }
@@ -767,21 +892,28 @@ function resolveCollisions(state: GameState): void {
   state.balloons = state.balloons.filter((balloon) => !deadBalloonIds.has(balloon.id));
 
   let coinDelta = 0;
-  for (const balloon of poppedBalloons) {
-    coinDelta += balloon.reward;
-    spawnPopParticles(state, balloon.x, balloon.y, balloon.color);
+  let scoreDelta = 0;
+  const comboIdsUsed = new Set<TowerComboId>();
+  for (const pop of poppedBalloons) {
+    coinDelta += pop.balloon.reward + pop.dart.rewardBonus;
+    scoreDelta += BASE_POP_SCORE + pop.balloon.reward + pop.dart.rewardBonus;
+    if (pop.dart.comboId) {
+      comboIdsUsed.add(pop.dart.comboId);
+      scoreDelta += 4;
+    }
+    spawnPopParticles(state, pop.balloon.x, pop.balloon.y, pop.balloon.color);
   }
 
-  const scoreDelta = Math.round((BASE_POP_SCORE + coinDelta) * scoreMultiplier(state));
   state.poppedTotal += poppedBalloons.length;
   state.score += scoreDelta;
   state.coins += coinDelta;
   state.hitMarkerMs = HIT_MARKER_DURATION_MS;
-  state.hitMarkerX = poppedBalloons[0].x;
-  state.hitMarkerY = poppedBalloons[0].y;
+  state.hitMarkerX = poppedBalloons[0].balloon.x;
+  state.hitMarkerY = poppedBalloons[0].balloon.y;
   state.scoreTickValue = scoreDelta;
   state.scoreTickMs = SCORE_TICK_DURATION_MS;
-  appendEvent(state, "pop", `x${poppedBalloons.length} score:${state.score} coins:${state.coins}`);
+  const comboSuffix = comboIdsUsed.size > 0 ? ` combos:${Array.from(comboIdsUsed).join("+")}` : "";
+  appendEvent(state, "pop", `x${poppedBalloons.length} score:${state.score} coins:${state.coins}${comboSuffix}`);
 }
 
 function maybeStartNextWave(state: GameState): void {
@@ -865,6 +997,8 @@ export function snapshotState(state: GameState): GameSnapshot {
     towersPlaced: state.towers.length,
     projectilesAlive: state.darts.length,
     poppedTotal: state.poppedTotal,
+    comboCount: state.activeCombos.length,
+    activeComboIds: state.activeCombos.map((combo) => combo.id),
     seed: state.seed,
     pendingEvents: state.pendingEvents.map((event) => `${event.type}:${event.note}`),
   };

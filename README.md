@@ -1,27 +1,27 @@
 # daily-classic-game-2026-05-05-bloons-tower-combos
 
 <p align="center">
-  <strong>Bloons-style lane defense scaffold for today’s tower-combo run.</strong>
+  <strong>Bloons-style lane defense where nearby tower pairs unlock deterministic combo bonuses instead of relying on random spikes.</strong>
 </p>
 
 <p align="center">
-  <img alt="Gameplay with tower shop and speed round" src="playwright/main-actions/shot-7.png" width="920" />
+  <img alt="Crossfire Link active in Bloons Tower Combos" src="playwright/main-actions/shot-6.png" width="920" />
 </p>
 
 ## GIF Captures
-### Start and First Pops
+### Combo Link Online
 <p align="center">
-  <img alt="Start and first pops" src="assets/gifs/start-and-first-pop.gif" width="900" />
+  <img alt="Dart Monkey and Tack Sprayer activating Crossfire Link" src="assets/gifs/combo-link-online.gif" width="900" />
 </p>
 
-### Speed Round Burst
+### Crossfire Pops
 <p align="center">
-  <img alt="Speed round burst" src="assets/gifs/speed-round-burst.gif" width="900" />
+  <img alt="Crossfire Link generating deterministic combo pops" src="assets/gifs/crossfire-pops.gif" width="900" />
 </p>
 
 ### Pause and Reset
 <p align="center">
-  <img alt="Pause and reset" src="assets/gifs/pause-and-reset.gif" width="900" />
+  <img alt="Pause and reset flow in Bloons Tower Combos" src="assets/gifs/pause-and-reset.gif" width="900" />
 </p>
 
 ## Quick Start
@@ -33,35 +33,32 @@ pnpm build
 ```
 
 ## How To Play
-- From title, choose a course and difficulty.
-- During gameplay, press `1`-`4` to select a tower, then click ground to place.
-- Click an existing tower to upgrade it (up to 2 upgrades).
-- If no placement/upgrade action is used, clicking fires a manual assist dart.
+- Choose a course and difficulty, or launch `?scripted_demo=1` for the deterministic automation path.
+- Press `1`-`4` to select a tower and click open ground to place it.
+- Click an existing tower to buy the next upgrade tier when you have enough coins.
+- Click empty ground with no tower selected to fire a manual assist dart from base.
 - Controls:
-- `P`: pause/resume.
-- `R`: restart to seeded baseline.
+- `P`: pause or resume.
+- `R`: restart to the seeded title-state baseline.
 - `F`: toggle fullscreen.
-- `0`: cancel tower placement.
+- `0` or `Esc`: cancel tower placement.
 
 ## Rules
-- Escaped balloons remove one life.
-- Balloon tiers have higher health at later waves, and black balloons resist ice slow effects.
-- Completing a wave grants bonus coins and unlocks stronger towers by wave.
-- Losing all lives ends the run.
-- Deterministic scripted mode remains available at `?scripted_demo=1`.
+- Bloons follow a seeded path; every escape costs one life.
+- Towers cannot overlap the track or another placed tower.
+- Waves award completion coins and unlock stronger tower options.
+- Combo links only activate when the matching tower pair is within its link radius.
+- Losing all lives ends the run immediately.
 
 ## Scoring
-- Popping balloons grants score and coins.
-- Score scales up during speed rounds.
-- HUD tracks score, lives, wave, and coins.
-- `window.render_game_to_text()` exposes deterministic state snapshots.
+- Each pop grants base score plus the balloon reward value.
+- Combo projectiles add extra score and coin bonuses on successful pops.
+- `window.render_game_to_text()` reports deterministic state including `comboCount` and `activeComboIds`.
 
 ## Twist
-- Speed rounds activate every `20s` for `8s`.
-- During speed rounds:
-- Balloon movement speed is multiplied by `1.75x`.
-- Pop scoring is multiplied by `2x`.
-- HUD switches to orange speed-round status with countdown.
+- `Crossfire Link`: place a Dart Monkey and Tack Sprayer close together to speed up their firing cadence and increase pop payouts.
+- `Shatter Lane`: place an Ice Tower and Sniper close together so slowed bloons become high-value sniper targets.
+- Combo status is surfaced in the HUD and rendered as visible link lines between paired towers.
 
 ## Verification
 ```bash
@@ -70,9 +67,10 @@ pnpm build
 WEB_GAME_URL="http://127.0.0.1:4173/?scripted_demo=1" node scripts/capture_playwright.mjs
 ```
 
-Deterministic capture proof:
-- `playwright/main-actions/state-2.json` confirms tower placement and coins update.
-- `playwright/main-actions/state-7.json` confirms speed round + progression state.
+Deterministic proof:
+- `playwright/main-actions/state-4.json` shows `comboCount: 1` and `activeComboIds: ["crossfire_link"]`.
+- `playwright/main-actions/state-6.json` shows combo-tagged pops raising score to `88` and coins to `52`.
+- `playwright/main-actions/state-9.json` confirms the combo persists into wave `2` with continued deterministic scoring.
 
 Browser hooks:
 - `window.advanceTime(ms)`
@@ -86,14 +84,13 @@ src/
   rng.ts
   collision.ts
   data/
+    combos.ts
     maps.ts
     towers.ts
     waves.ts
   systems/
     towers.ts
     waves.ts
-  ui/
-    menu.ts
   game.ts
   input.ts
   render.ts
